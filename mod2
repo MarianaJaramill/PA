@@ -1,0 +1,125 @@
+library(shiny)
+library(lpSolve)
+library(ggplot2)
+
+ui <- fluidPage(
+  titlePanel("Planificación de Fuerza Laboral y Producción de Paris Paint Company"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      textInput("demanda_txt", "Demanda trimestral (separada por comas):", "380,630,220,160"),
+      numericInput("trab_inicial", "Trabajadores iniciales:", 280),
+      numericInput("inv_ini", "Inventario inicial (en galones):", 80000),
+      numericInput("inv_fin", "Inventario final deseado (en galones):", 20000),
+      numericInput("unidad_x_trab_trimestral", "Unidades por trabajador por trimestre:", 1000),
+      numericInput("c_contratacion", "Costo por contratación (en dólares):", 1200),
+      numericInput("c_despido", "Costo por despido (en dólares):", 2500),
+      numericInput("costoinv", "Costo por unidad de inventario (en dólares):", 1),
+      actionButton("resolver", "Calcular plan de fuerza laboral")
+    ),
+    
+    mainPanel(
+      tableOutput("comparacion"),
+      h4("Tabla de Unidades Producidas e Inventario"),
+      tableOutput("tabla_unidades"),
+      h4("Tabla de Personal y Costos"),
+      tableOutput("tabla_personal"),
+      h4("Gráfico de Unidades, Demanda e Inventario"),
+      plotOutput("grafico_unidades"),
+      h4("Gráfico de Personal"),
+      plotOutput("grafico_personal")
+    )
+  )
+)
+
+server <- function(input, output) {
+  
+  observeEvent(input$resolver, {
+    demanda <- as.numeric(unlist(strsplit(input$demanda_txt, ",")))
+    T <- length(demanda)
+    
+    if (T != 4) {
+      showNotification("Por favor ingrese demanda para 4 trimestres.", type = "error")
+      return()
+    }
+    
+    # Parámetros
+    trab_ini <- input$trab_inicial
+    inv_ini <- input$inv_ini
+    inv_fin <- input$inv_fin
+    unidad_x_trab_trimestral <- input$unidad_x_trab_trimestral
+    c_contra <- input$c_contratacion
+    c_desp <- input$c_despido
+    c_inv <- input$costoinv
+    
+    # Política Nivelada
+    produccion_total <- sum(demanda) + inv_fin - inv_ini
+    produccion_por_trimestre <- ceiling(produccion_total / T)
+    trabajadores_requeridos <- ceiling(produccion_por_trimestre / unidad_x_trab_trimestral)
+    
+    # Cálculo de contrataciones y despidos
+    contrataciones <- max(0, trabajadores_requeridos - trab_ini)
+    despidos <- max(0, trab_ini - trabajadores_requeridos)
+    
+    # Inventarios
+    inventarios <- numeric(T)
+    inventarios[1] <- inv_ini + produccion_por_trimestre - demanda[1]
+    for (t in 2:T) {
+      inventarios[t] <- inventarios[t - 1] + produccion_por_trimestre - demanda[t]
+    }
+    
+    # Costo total
+    costo_total <- contrataciones * c_contra + despidos * c_desp + sum(inventarios * c_inv)
+    
+    # Resultados
+    resultados <- data.frame(
+      Trimestre = factor(1:T),
+      Demanda = demanda,
+      Producción = rep(produccion_por_trimestre, T),
+      Inventario_Inicial = c(inv_ini, head(inventarios, -1)),
+      Inventario_Final = inventarios,
+      Trabajadores = rep(trabajadores_requeridos, T),
+      Contrataciones = rep(contrataciones, T),
+      Despidos = rep(despidos, T),
+      Costo_Total = rep(costo_total, T)
+    )
+    
+    output$comparacion <- renderTable({
+      data.frame(Política = "Nivelada", Costo_Total = costo_total)
+    })
+    
+    output$tabla_unidades <- renderTable({
+      resultados[, c("Trimestre", "Demanda", "Producción", "Inventario_Inicial", "Inventario_Final")]
+    })
+    
+    output$tabla_personal <- renderTable({
+      resultados[, c("Trimestre", "Trabajadores", "Contrataciones", "Despidos")]
+    })
+    
+    output$grafico_unidades <- renderPlot({
+      df_long <- reshape2::melt(resultados[, c("Trimestre", "Demanda", "Producción", "Inventario_Final")],
+                                id.vars = "Trimestre",
+                                variable.name = "Tipo",
+                                value.name = "Cantidad")
+      ggplot(df_long, aes(x = Trimestre, y = Cantidad, fill = Tipo)) +
+        geom_bar(stat = "identity", position = "dodge") +
+        scale_fill_manual(values = c("skyblue", "seagreen3", "tomato")) +
+        labs(title = "Producción, Demanda e Inventario por Trimestre", y = "Cantidad de galones") +
+        theme_minimal()
+    })
+    
+    output$grafico_personal <- renderPlot({
+      df_long2 <- reshape2::melt(resultados[, c("Trimestre", "Trabajadores", "Contrataciones", "Despidos")],
+                                 id.vars = "Trimestre",
+                                 variable.name = "Tipo",
+                                 value.name = "Cantidad")
+      ggplot(df_long2, aes(x = Trimestre, y = Cantidad, fill = Tipo)) +
+        geom_bar(stat = "identity", position = "dodge") +
+        scale_fill_manual(values = c("orchid", "orange", "brown")) +
+        labs(title = "Personal, Contrataciones y Despidos", y = "Número de trabajadores") +
+        theme_minimal()
+    })
+  })
+}
+
+shinyApp(ui = ui, server = server)
